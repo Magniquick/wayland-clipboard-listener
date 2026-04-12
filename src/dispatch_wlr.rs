@@ -97,6 +97,7 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()>
         match event {
             zwlr_data_control_device_v1::Event::DataOffer { id } => {
                 if state.copy_data.is_some() {
+                    id.destroy();
                     return;
                 }
                 if let WlListenType::ListenOnSelect = state.listentype {
@@ -108,16 +109,17 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()>
                 }
             }
             zwlr_data_control_device_v1::Event::Finished => {
-                let source = state
-                    .data_manager
-                    .as_ref()
-                    .unwrap()
-                    .create_data_source(qh, ());
-                state
-                    .data_device
-                    .as_ref()
-                    .unwrap()
-                    .set_selection(Some(&source));
+                // Protocol spec: "This data control object is no longer valid
+                // and should be destroyed by the client."
+                // Re-create the device so we keep receiving events.
+                if let Some(old) = state.data_device.take() {
+                    old.destroy();
+                }
+                if let (Some(manager), Some(seat)) =
+                    (state.data_manager.as_ref(), state.seat.as_ref())
+                {
+                    state.data_device = Some(manager.get_data_device(seat, qh, ()));
+                }
             }
             zwlr_data_control_device_v1::Event::PrimarySelection { id } => {
                 if let Some(offer) = id {
@@ -130,6 +132,7 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()>
                 };
                 // if is copying, not run this
                 if state.copy_data.is_some() {
+                    offer.destroy();
                     return;
                 }
                 // TODO: how can I handle the mimetype?
@@ -156,6 +159,9 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()>
                     drop(write);
                     state.pipereader = Some(read);
                 }
+                // Protocol spec: "The client must destroy the previous
+                // selection offer, if any, upon receiving this event."
+                offer.destroy();
             }
             _ => {
                 log::info!("unhandled event: {event:?}");
